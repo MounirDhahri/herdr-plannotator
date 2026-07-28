@@ -1,0 +1,19 @@
+#!/usr/bin/env bun
+
+import { runPresenter } from "../src/presenter.ts";
+
+const cancellation = new AbortController();
+const cancel = () => cancellation.abort();
+process.once("SIGINT", cancel);
+process.once("SIGTERM", cancel);
+
+try {
+  process.exitCode = await runPresenter(
+    undefined,
+    undefined,
+    { signal: cancellation.signal },
+  );
+} finally {
+  process.removeListener("SIGINT", cancel);
+  process.removeListener("SIGTERM", cancel);
+}
