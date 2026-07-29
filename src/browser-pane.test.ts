@@ -73,7 +73,7 @@ describe("Browser pane", () => {
         "--source",
         "visible",
         "--timeout",
-        "15000",
+        "5000",
       ],
     ]);
   });
