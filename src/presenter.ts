@@ -38,9 +38,8 @@ export async function runPresenter(
         );
       }
       const handle = await openBrowserPane(
-        runtime.herdrBin,
+        runtime,
         request.url,
-        process.env.HERDR_PANE_ID!.trim(),
         {
           env: process.env,
           signal: options.signal,

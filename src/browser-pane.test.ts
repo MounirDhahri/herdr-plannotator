@@ -18,30 +18,37 @@ const success = (
   aborted: false,
 });
 
+const executables = {
+  herdrBin: "/bin/herdr",
+  terminalBrowserBin: "/bin/terminal-browser",
+};
+
+const listing = JSON.stringify({
+  self: { tab: "w1:t1", pane: "w1:p1" },
+  browsers: [
+    { key: "100-1", pane: { tab: "w1:t1", pane: "w1:p9" } },
+    { key: "200-1", pane: { tab: "w1:t1", pane: "w1:p2" } },
+  ],
+});
+
 describe("Browser pane", () => {
-  test("opens the supplied URL beside the source pane", async () => {
-    const calls: string[][] = [];
+  test("opens the supplied URL in a zoomed split beside the source pane", async () => {
+    const calls: Array<[string, string[]]> = [];
     const runner: CommandRunner = async (command, args, options) => {
-      expect(command).toBe("/bin/herdr");
-      calls.push(args);
+      calls.push([command, args]);
       expect(options?.signal).toBeDefined();
-      if (args[0] === "pane") {
-        return success();
+      if (args[0] === "open") {
+        return success("opened 200-1 (terminal-browser ls for details)\n");
       }
-      return success(JSON.stringify({
-        result: {
-          type: "plugin_pane_opened",
-          plugin_pane: {
-            pane: { pane_id: "w1:p2" },
-          },
-        },
-      }));
+      if (args[0] === "ls") {
+        return success(listing);
+      }
+      return success();
     };
 
     await expect(openBrowserPane(
-      "/bin/herdr",
+      executables,
       "http://127.0.0.1:43127",
-      "w1:p1",
       {
         runner,
         signal: new AbortController().signal,
@@ -49,82 +56,69 @@ describe("Browser pane", () => {
     )).resolves.toEqual({ paneId: "w1:p2" });
     expect(calls).toEqual([
       [
-        "plugin",
-        "pane",
-        "open",
-        "--plugin",
-        "official.browser",
-        "--entrypoint",
-        "browser",
-        "--placement",
-        "zoomed",
-        "--target-pane",
-        "w1:p1",
-        "--env",
-        "HERDR_BROWSER_INITIAL_URL=http://127.0.0.1:43127",
-        "--focus",
+        "/bin/terminal-browser",
+        ["open", "http://127.0.0.1:43127", "--split", "right", "--no-merge"],
       ],
-      [
-        "pane",
-        "wait-output",
-        "w1:p2",
-        "--match",
-        "http://127.0.0.1:43127",
-        "--source",
-        "visible",
-        "--timeout",
-        "5000",
-      ],
+      ["/bin/terminal-browser", ["ls", "--json"]],
+      ["/bin/herdr", ["pane", "zoom", "w1:p2", "--on"]],
     ]);
   });
 
-  test("closes the pane when Browser does not start", async () => {
-    const calls: string[][] = [];
+  test("fails when terminal-browser does not start", async () => {
+    const runner: CommandRunner = async () => ({
+      ...success(),
+      exitCode: 1,
+      stderr: "no terminal",
+    });
+
+    await expect(openBrowserPane(
+      executables,
+      "http://127.0.0.1:43127",
+      { runner },
+    )).rejects.toThrow("Failed to open terminal-browser: no terminal");
+  });
+
+  test("fails when the opened browser has no Herdr pane", async () => {
+    const runner: CommandRunner = async (_command, args) => (
+      args[0] === "open"
+        ? success("opened 300-1 (terminal-browser ls for details)\n")
+        : success(listing)
+    );
+
+    await expect(openBrowserPane(
+      executables,
+      "http://127.0.0.1:43127",
+      { runner },
+    )).rejects.toThrow("did not report a Herdr pane for browser 300-1");
+  });
+
+  test("keeps the pane when zoom fails", async () => {
     const runner: CommandRunner = async (_command, args) => {
-      calls.push(args);
-      if (args[0] === "plugin" && args[2] === "open") {
-        return success(JSON.stringify({
-          result: {
-            type: "plugin_pane_opened",
-            plugin_pane: {
-              pane: { pane_id: "w1:p2" },
-            },
-          },
-        }));
+      if (args[0] === "open") {
+        return success("opened 200-1\n");
       }
-      if (args[0] === "pane" && args[1] === "wait-output") {
-        return { ...success(), exitCode: 1, stderr: "Browser exited" };
+      if (args[0] === "ls") {
+        return success(listing);
       }
-      return success();
+      return { ...success(), exitCode: 1, stderr: "zoom failed" };
     };
 
     await expect(openBrowserPane(
-      "/bin/herdr",
+      executables,
       "http://127.0.0.1:43127",
-      "w1:p1",
       { runner },
-    )).rejects.toThrow("Failed to start Browser: Browser exited");
-    expect(calls.at(-1)).toEqual([
-      "plugin",
-      "pane",
-      "close",
-      "w1:p2",
-    ]);
+    )).resolves.toEqual({ paneId: "w1:p2" });
   });
 
-  test("closing an already-removed plugin pane is idempotent", async () => {
+  test("closing an already-removed pane is idempotent", async () => {
     const calls: string[][] = [];
     const runner: CommandRunner = async (_command, args) => {
       calls.push(args);
       return {
         ...success(),
         exitCode: 1,
-        stderr: JSON.stringify({
-          error: {
-            code: args[0] === "plugin"
-              ? "plugin_pane_not_found"
-              : "pane_not_found",
-          },
+        stdout: JSON.stringify({
+          error: { code: "pane_not_found" },
         }),
       };
     };
@@ -134,9 +128,6 @@ describe("Browser pane", () => {
       { paneId: "w1:p2" },
       { runner },
     )).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      ["plugin", "pane", "close", "w1:p2"],
-      ["pane", "close", "w1:p2"],
-    ]);
+    expect(calls).toEqual([["pane", "close", "w1:p2"]]);
   });
 });
