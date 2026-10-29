@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
-  mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -11,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  discoverBrowserPlugin,
   herdrVersionSupported,
   resolveRuntime,
+  resolveTerminalBrowserExecutable,
   type ResolveRuntimeOptions,
 } from "./herdr.ts";
 import type { CommandRunner } from "./command.ts";
@@ -34,88 +33,48 @@ describe("Herdr discovery", () => {
     expect(herdrVersionSupported("0.10.0")).toBe(true);
   });
 
-  test("requires an enabled official Browser plugin", async () => {
-    const runner: CommandRunner = async () => ({
-      exitCode: 0,
-      signal: null,
-      stdout: JSON.stringify({
-        id: "cli:plugin",
-        result: {
-          type: "plugin_list",
-          plugins: [{
-            plugin_id: "official.browser",
-            plugin_root: "/plugins/browser",
-            enabled: true,
-          }],
-        },
-      }),
-      stderr: "",
-      timedOut: false,
-      outputExceeded: false,
-      aborted: false,
-    });
-
-    await expect(discoverBrowserPlugin("/bin/herdr", runner)).resolves.toBe(
-      "/plugins/browser",
-    );
-  });
-
-  test("requires Browser support for an initial pane URL", async () => {
-    const root = mkdtempSync(join(tmpdir(), "herdr-plannotator-browser-"));
+  test("resolves terminal-browser alongside Herdr", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-plannotator-runtime-"));
     temporaryPaths.push(root);
-    const browserRoot = join(root, "browser");
-    const browserSource = join(browserRoot, "src");
     const herdrBin = join(root, "herdr");
-    mkdirSync(browserSource, { recursive: true });
-    writeFileSync(
-      join(browserRoot, "herdr-plugin.toml"),
-      'id = "official.browser"\n',
-    );
-    writeFileSync(join(browserSource, "viewer.ts"), "export {};\n");
-    writeFileSync(herdrBin, "#!/bin/sh\n");
-    chmodSync(herdrBin, 0o755);
+    const terminalBrowserBin = join(root, "terminal-browser");
+    for (const executable of [herdrBin, terminalBrowserBin]) {
+      writeFileSync(executable, "#!/bin/sh\n");
+      chmodSync(executable, 0o755);
+    }
 
-    const runner: CommandRunner = async (_command, args) => ({
+    const runner: CommandRunner = async (command) => ({
       exitCode: 0,
       signal: null,
-      stdout: args[0] === "--version"
+      stdout: command === realpathSync(herdrBin)
         ? "herdr 0.7.5\n"
-        : JSON.stringify({
-          result: {
-            plugins: [{
-              plugin_id: "official.browser",
-              plugin_root: browserRoot,
-              enabled: true,
-            }],
-          },
-        }),
+        : "terminal-browser v0.15.1\n",
       stderr: "",
       timedOut: false,
       outputExceeded: false,
       aborted: false,
     });
 
-    const options = {
+    const runtime = await resolveRuntime({
       env: {
         HERDR_PLANNOTATOR_HERDR_BIN: herdrBin,
+        HERDR_PLANNOTATOR_TERMINAL_BROWSER_BIN: terminalBrowserBin,
       },
       runner,
-      cached: {
-        schema: 2,
-        owner: "official.plannotator",
-        herdrBin,
-        configuredAt: "2026-07-27T00:00:00.000Z",
-      },
-    } satisfies ResolveRuntimeOptions;
+      cached: null,
+    } satisfies ResolveRuntimeOptions);
+    expect(runtime).toEqual({
+      herdrBin: realpathSync(herdrBin),
+      herdrVersion: "0.7.5",
+      terminalBrowserBin: realpathSync(terminalBrowserBin),
+      terminalBrowserVersion: "terminal-browser v0.15.1",
+    });
+  });
 
-    await expect(resolveRuntime(options)).rejects.toThrow(
-      "reinstall it to add HERDR_BROWSER_INITIAL_URL",
-    );
-    writeFileSync(
-      join(browserSource, "viewer.ts"),
-      'const initialUrl = process.env.HERDR_BROWSER_INITIAL_URL;\n',
-    );
-    const runtime = await resolveRuntime(options);
-    expect(runtime.browserRoot).toBe(realpathSync(browserRoot));
+  test("reports a missing terminal-browser", async () => {
+    await expect(resolveTerminalBrowserExecutable({
+      HOME: "/nonexistent",
+      PATH: "",
+    })).rejects.toThrow("terminal-browser executable was not found");
   });
 });

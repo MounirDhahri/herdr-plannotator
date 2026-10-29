@@ -1,26 +1,22 @@
 # Herdr Plannotator
 
-Herdr Plannotator opens Plannotator's existing review page in a Herdr Browser
-pane. Plannotator still owns approvals, feedback, and agent behavior. This
-plugin only changes where the page appears.
+Herdr Plannotator opens Plannotator's existing review page in a
+[terminal-browser](https://terminal-browser.com) pane inside Herdr. Plannotator
+still owns approvals, feedback, and agent behavior. This plugin only changes
+where the page appears.
 
 ## Requirements
 
 - Herdr 0.7.5 or newer
 - A Plannotator release with external presenter support
-- [Herdr Browser](https://github.com/ogulcancelik/herdr-browser), installed and enabled
+- [terminal-browser](https://terminal-browser.com), on `PATH` or in
+  `~/.local/bin`
 - Bun
-- Google Chrome or Chromium
 - Herdr's experimental Kitty graphics support
 
-Install Browser first:
-
-```bash
-herdr plugin install ogulcancelik/herdr-browser --yes
-```
-
-Run the same command again if your installed copy predates Browser's initial
-URL support.
+If terminal-browser lives somewhere else, set
+`HERDR_PLANNOTATOR_TERMINAL_BROWSER_BIN` to its absolute path in the agent's
+environment.
 
 Enable graphics in Herdr's configuration:
 
@@ -75,10 +71,10 @@ or use an absolute or `~/...` path.
 ## How it works
 
 When Plannotator has a page ready, it runs the plugin's presenter helper with
-one JSON request. The helper asks Herdr to open a focused, zoomed
-`official.browser` pane at Plannotator's local URL. Herdr returns the pane ID.
-When the review finishes, the helper closes that pane. Browser closes its own
-view when the pane exits.
+one JSON request. The helper runs `terminal-browser open <url> --split right`
+from the agent's pane, reads the new browser's Herdr pane ID from
+`terminal-browser ls --json`, and zooms that pane. When the review finishes,
+the helper closes the pane, which also closes the browser.
 
 The helper never interprets approval or feedback. The existing Plannotator
 server receives those choices directly from its web page.

@@ -84,9 +84,9 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
         : `${runtime.herdrVersion}; ${MIN_HERDR_VERSION} or newer is required`,
     });
     checks.push({
-      name: "Browser plugin",
+      name: "Terminal Browser",
       ok: true,
-      detail: runtime.browserRoot,
+      detail: `${runtime.terminalBrowserVersion} at ${runtime.terminalBrowserBin}`,
     });
   } catch (error) {
     checks.push({

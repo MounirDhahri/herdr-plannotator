@@ -1,12 +1,11 @@
-import { readFile, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 
 import {
-  BROWSER_DISCOVERY_TIMEOUT_MS,
-  BROWSER_INITIAL_URL_ENV,
-  BROWSER_PLUGIN_ID,
   HERDR_VERSION_TIMEOUT_MS,
   MIN_HERDR_VERSION,
+  TERMINAL_BROWSER_BIN,
+  TERMINAL_BROWSER_VERSION_TIMEOUT_MS,
 } from "./constants.ts";
 import type { CommandRunner } from "./command.ts";
 import { commandFailureReason, runCommand } from "./command.ts";
@@ -15,7 +14,6 @@ import {
   readIntegrationConfig,
   usableExecutable,
 } from "./integration-config.ts";
-import { isJsonObject } from "./json-file.ts";
 import { integrationConfigPath } from "./paths.ts";
 
 export type ResolvedHerdrRuntime = {
@@ -24,7 +22,8 @@ export type ResolvedHerdrRuntime = {
 };
 
 export type ResolvedRuntime = ResolvedHerdrRuntime & {
-  browserRoot: string;
+  terminalBrowserBin: string;
+  terminalBrowserVersion: string;
 };
 
 export type ResolveRuntimeOptions = {
@@ -39,17 +38,20 @@ export async function resolveRuntime(
 ): Promise<ResolvedRuntime> {
   const env = options.env ?? process.env;
   const runner = options.runner ?? runCommand;
-  const herdrBin = await resolveHerdrExecutable(options);
-  const [herdrVersion, browserRoot] = await Promise.all([
+  const [herdrBin, terminalBrowserBin] = await Promise.all([
+    resolveHerdrExecutable(options),
+    resolveTerminalBrowserExecutable(env),
+  ]);
+  const [herdrVersion, terminalBrowserVersion] = await Promise.all([
     readHerdrVersion(herdrBin, runner, env, options.signal),
-    discoverBrowserPlugin(herdrBin, runner, env, options.signal)
-      .then(validateBrowserRoot),
+    readTerminalBrowserVersion(terminalBrowserBin, runner, env, options.signal),
   ]);
 
   return {
     herdrBin,
     herdrVersion,
-    browserRoot,
+    terminalBrowserBin,
+    terminalBrowserVersion,
   };
 }
 
@@ -118,21 +120,38 @@ export function herdrVersionSupported(
   return true;
 }
 
-export async function discoverBrowserPlugin(
-  herdrBin: string,
+export async function resolveTerminalBrowserExecutable(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const terminalBrowserBin = await resolveExecutableCandidates(
+    [
+      env.HERDR_PLANNOTATOR_TERMINAL_BROWSER_BIN,
+      TERMINAL_BROWSER_BIN,
+      // Herdr actions may run without the user's shell PATH; this is the
+      // installer's default location.
+      join(env.HOME?.trim() || homedir(), ".local", "bin", TERMINAL_BROWSER_BIN),
+    ],
+    env,
+  );
+  if (!terminalBrowserBin) {
+    throw new Error(
+      `${TERMINAL_BROWSER_BIN} executable was not found; install it from https://terminal-browser.com`,
+    );
+  }
+  return terminalBrowserBin;
+}
+
+export async function readTerminalBrowserVersion(
+  terminalBrowserBin: string,
   runner: CommandRunner = runCommand,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runner(
-    herdrBin,
-    ["plugin", "list", "--plugin", BROWSER_PLUGIN_ID, "--json"],
-    {
-      env,
-      timeoutMs: BROWSER_DISCOVERY_TIMEOUT_MS,
-      signal,
-    },
-  );
+  const result = await runner(terminalBrowserBin, ["--version"], {
+    env,
+    timeoutMs: TERMINAL_BROWSER_VERSION_TIMEOUT_MS,
+    signal,
+  });
   if (
     result.exitCode !== 0
     || result.timedOut
@@ -140,36 +159,10 @@ export async function discoverBrowserPlugin(
     || result.aborted
   ) {
     throw new Error(
-      `failed to inspect ${BROWSER_PLUGIN_ID}: ${commandFailureReason(result)}`,
+      `failed to read ${TERMINAL_BROWSER_BIN} version: ${commandFailureReason(result)}`,
     );
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Herdr returned malformed plugin JSON: ${result.stdout.trim()}`);
-  }
-  const plugins = isJsonObject(parsed)
-    && isJsonObject(parsed.result)
-    && Array.isArray(parsed.result.plugins)
-    ? parsed.result.plugins
-    : null;
-  const plugin = plugins?.find((candidate) => (
-    isJsonObject(candidate) && candidate.plugin_id === BROWSER_PLUGIN_ID
-  ));
-  if (!isJsonObject(plugin)) {
-    throw new Error(
-      `${BROWSER_PLUGIN_ID} is not installed; run: herdr plugin install ogulcancelik/herdr-browser --yes`,
-    );
-  }
-  if (plugin.enabled !== true) {
-    throw new Error(`${BROWSER_PLUGIN_ID} is installed but disabled`);
-  }
-  if (typeof plugin.plugin_root !== "string" || !isAbsolute(plugin.plugin_root)) {
-    throw new Error(`${BROWSER_PLUGIN_ID} returned an invalid plugin root`);
-  }
-  return plugin.plugin_root;
+  return result.stdout.trim();
 }
 
 export async function resolveExecutableCandidates(
@@ -213,24 +206,6 @@ async function findOnPath(
     }
   }
   return null;
-}
-
-async function validateBrowserRoot(rawRoot: string): Promise<string> {
-  const root = await realpath(rawRoot);
-  const manifest = join(root, "herdr-plugin.toml");
-  const manifestText = await readFile(manifest, "utf8");
-  if (!/^\s*id\s*=\s*["']official\.browser["']\s*$/m.test(manifestText)) {
-    throw new Error(`${rawRoot} is not the ${BROWSER_PLUGIN_ID} plugin root`);
-  }
-  const viewer = await readFile(join(root, "src", "viewer.ts"), "utf8");
-  // Browser kept version 0.1.0 when initial URL support was added, so inspect
-  // the installed viewer for the capability instead of comparing versions.
-  if (!viewer.includes(BROWSER_INITIAL_URL_ENV)) {
-    throw new Error(
-      `${BROWSER_PLUGIN_ID} is too old; reinstall it to add ${BROWSER_INITIAL_URL_ENV}`,
-    );
-  }
-  return root;
 }
 
 function parseSemver(version: string): [number, number, number] | null {
